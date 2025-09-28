@@ -1,10 +1,10 @@
 # B-tree Data Structure in Autonomous Vehicle Simulation
 
-## 🎯 **Overview**
+## Overview
 
 This document explains how **B-tree data structures** are used in our autonomous vehicle simulation to manage real-time sensor data and enable intelligent driving decisions.
 
-## 🏗️ **B-tree Architecture**
+## B-tree Architecture
 
 ### **Why B-trees for Autonomous Vehicles?**
 
@@ -33,7 +33,7 @@ Traversal          | O(n)            | <10ms for complete dataset
 - **Memory locality**: Better cache performance
 - **Scalable storage**: Handles millions of records
 
-## 🔧 **Implementation Details**
+## Implementation Details
 
 ### **Composite Key Strategy**
 
@@ -84,7 +84,7 @@ class BTreeNode:
         self.children: List["BTreeNode"] = []  # Array of child pointers
 ```
 
-## 🚗 **Real-World Usage in Simulation**
+## Real-World Usage in Simulation
 
 ### **1. Real-Time Data Insertion**
 
@@ -192,7 +192,7 @@ def make_driving_decision(our_car: Car, btree_manager: BTreeManager) -> str:
     return "Cruising"
 ```
 
-## 📊 **Performance Analysis**
+## Performance Analysis
 
 ### **Scalability Testing**
 
@@ -257,7 +257,7 @@ def analyze_memory_usage(btree_manager: BTreeManager):
     print(f"Memory usage: {total_memory / 1024 / 1024:.2f} MB")
 ```
 
-## 🔍 **B-tree Operations in Detail**
+## B-tree Operations in Detail
 
 ### **1. Insertion Algorithm**
 
@@ -358,7 +358,7 @@ def inorder_keys(self) -> List[int]:
     return result
 ```
 
-## 🎯 **Real-World Applications**
+## Real-World Applications
 
 ### **1. Traffic Management Systems**
 - **Real-time vehicle tracking** using B-tree indexing
@@ -375,7 +375,7 @@ def inorder_keys(self) -> List[int]:
 - **Emergency vehicle routing** with real-time updates
 - **Parking management** through occupancy tracking
 
-## 📚 **Further Reading**
+## Further Reading
 
 - **B-tree Fundamentals**: Cormen, Leiserson, Rivest, Stein - "Introduction to Algorithms"
 - **Database Systems**: Garcia-Molina, Ullman, Widom - "Database Systems: The Complete Book"
