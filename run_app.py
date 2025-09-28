@@ -6,19 +6,30 @@ import time
 
 
 def main() -> None:
-    app_path = "/Users/vidyadharpothula/dsa_project/multilane_streamlit_original.py"
+    app_path = "/Users/vidyadharpothula/Desktop/dsa_project/smooth_av_simulation.py"
     url = "http://localhost:8501"
 
     env = os.environ.copy()
-    cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--server.port=8501"]
+    # Make it publicly accessible by binding to all interfaces
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", app_path, 
+        "--server.port=8501", 
+        "--server.address=0.0.0.0",
+        "--server.headless=true",
+        "--browser.gatherUsageStats=false"
+    ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     # Wait briefly for the server to bind to the port
-    time.sleep(1.5)
+    time.sleep(2.0)
     try:
         webbrowser.open(url)
     except Exception:
         pass
+
+    print(f"Professional AV Simulation is running at: {url}")
+    print("The simulation is now publicly accessible on your network.")
+    print("Press Ctrl+C to stop the simulation.")
 
     # Stream output to console for visibility; exit when streamlit exits
     if proc.stdout is not None:
