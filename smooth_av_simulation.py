@@ -429,24 +429,104 @@ def init_cars() -> Dict[int, Car]:
     return cars
 
 
-def update_other_cars(cars: Dict[int, Car], rng: random.Random) -> None:
-    """Update other cars with realistic behavior and smooth movements"""
+def update_other_cars(cars: Dict[int, Car], rng: random.Random, signal: TrafficSignal) -> None:
+    """Update other cars with realistic behavior, signal compliance, and collision avoidance."""
+    # Pre-compute nearest ahead per lane for following-gap control
+    # Build list of cars per lane (including our car 0, as others should avoid it)
+    lane_to_cars: Dict[int, List[Car]] = {1: [], 2: [], 3: []}
+    for car in cars.values():
+        lane_int = int(round(car.lane_id))
+        lane_int = max(1, min(3, lane_int))
+        lane_to_cars[lane_int].append(car)
+
+    for lane, lane_cars in lane_to_cars.items():
+        lane_cars.sort(key=lambda c: c.position)
+
+    def nearest_ahead(current: Car) -> Optional[Car]:
+        lane_int = int(round(current.lane_id))
+        lane_list = lane_to_cars.get(lane_int, [])
+        candidates = [c for c in lane_list if c.position > current.position]
+        if candidates:
+            return candidates[0]
+        # Circular road: consider first car as ahead beyond 1000m wrap
+        if lane_list:
+            return min(lane_list, key=lambda c: c.position)
+        return None
+
     for cid, car in cars.items():
-        if cid == 0:  # Skip our car
+        if cid == 0:  # Skip our car; it's driven by the autonomous driver
             continue
-            
-        # Add some speed variation
+
+        # Base speed variation
         speed_change = rng.uniform(-0.5, 0.5)
-        car.speed = max(25.0, min(car.speed + speed_change, car.max_speed))
-        
-        # Occasional lane changes for other cars (smooth)
-        if rng.random() < 0.01:  # 1% chance per tick
+        car.speed = max(0.0, min(car.speed + speed_change, car.max_speed))
+
+        # Signal compliance: compute stopping logic if approaching the signal from behind
+        if car.position <= signal.position:
+            distance_to_signal = signal.position - car.position
+            # Proper stopping distance in meters with 1s reaction buffer
+            v_mps = car.speed / 3.6
+            reaction_time_s = 1.0
+            stopping_distance = v_mps * reaction_time_s + (v_mps ** 2) / (2 * max(0.1, car.deceleration))
+            # Apply compliance for RED and conservative for YELLOW
+            must_stop = (
+                (signal.state == SignalState.RED and distance_to_signal <= stopping_distance + 5.0)
+                or (signal.state == SignalState.YELLOW and distance_to_signal <= stopping_distance)
+            )
+            if must_stop:
+                # Predict next advance; prevent crossing the line
+                dt = 0.1
+                predicted_advance = v_mps * dt
+                if (car.position + predicted_advance) >= (signal.position - 1.0) or distance_to_signal < 2.0:
+                    car.speed = 0.0
+                    car.position = min(car.position, signal.position - 1.0)
+                else:
+                    # Stronger braking as we get closer
+                    if distance_to_signal < 10.0:
+                        car.emergency_brake(dt=0.1)
+                    else:
+                        car.decelerate(dt=0.1)
+            else:
+                # Green or safe on yellow: if previously stopped near the line, nudge to start
+                if distance_to_signal < 5.0 and car.speed < 2.0 and signal.state == SignalState.GREEN:
+                    car.accelerate(dt=0.1)
+
+        # Following-gap collision avoidance in the current lane
+        ahead = nearest_ahead(car)
+        if ahead is not None and int(round(ahead.lane_id)) == int(round(car.lane_id)):
+            # Account for circular road wrap when ahead is actually first in lane
+            raw_gap = ahead.position - car.position
+            gap = raw_gap if raw_gap > 0 else (ahead.position + 1000.0) - car.position
+            # Desired time headway ~ 1.5s, convert speed km/h to m/s
+            speed_mps = car.speed / 3.6
+            desired_gap = max(10.0, speed_mps * 1.5)  # min 10m, more if faster
+            if gap < desired_gap:
+                # Too close: decelerate; if extremely close, emergency brake
+                if gap < 5.0:
+                    car.emergency_brake(dt=0.1)
+                else:
+                    car.decelerate(dt=0.1)
+                # Hard cap: prevent overlap by clamping position just behind ahead
+                if raw_gap <= 0 and ahead is not None:
+                    car.position = max(0.0, ahead.position - 2.0)
+            elif gap > desired_gap * 2 and car.speed < car.max_speed * 0.9:
+                # Plenty of room: gently accelerate
+                car.accelerate(dt=0.1)
+        else:
+            # No one ahead: if we were stopped and not at a red signal close-by, creep forward
+            near_red = (signal.state == SignalState.RED and car.position <= signal.position and (signal.position - car.position) < 10.0)
+            if not near_red and car.speed < 1.0:
+                car.accelerate(dt=0.1)
+
+        # Occasional lane changes for other cars (smooth), but avoid in front of signal when red
+        allow_lane_change = not (car.position <= signal.position and signal.state == SignalState.RED and (signal.position - car.position) < 30.0)
+        if allow_lane_change and rng.random() < 0.01:  # 1% chance per tick
             if car.lane_id > 1.0 and rng.random() < 0.5:
                 car.target_lane = car.lane_id - 1.0
             elif car.lane_id < 3.0 and rng.random() < 0.5:
                 car.target_lane = car.lane_id + 1.0
-        
-        # Smooth lane changes for all cars
+
+        # Smooth lane changes and position update
         car.smooth_lane_change()
         car.update_position()
 
@@ -462,6 +542,7 @@ def main() -> None:
         st.session_state.rng = random.Random(42)
         st.session_state.cars = init_cars()
         st.session_state.signal = TrafficSignal()
+        st.session_state.signal_mode = "Auto"  # Auto or Manual
         st.session_state.manager = BTreeManager()
         st.session_state.logger = SingleFileLogger(
             "/Users/vidyadharpothula/Desktop/dsa_project/logs_smooth"
@@ -523,6 +604,47 @@ def main() -> None:
         signal_color = "green" if signal.state == SignalState.GREEN else "orange" if signal.state == SignalState.YELLOW else "red"
         st.markdown(f"**Traffic Signal:** <span style='color: {signal_color}'>{signal.get_state_name()}</span>", unsafe_allow_html=True)
 
+        # Signal mode controls
+        st.subheader("Signal Control")
+        st.session_state.signal_mode = st.selectbox("Mode", ["Auto", "Manual"], index=0 if st.session_state.signal_mode == "Auto" else 1)
+        if st.session_state.signal_mode == "Manual":
+            b1, b2, b3 = st.columns(3)
+            if b1.button("Green"):
+                st.session_state.signal.state = SignalState.GREEN
+                st.session_state.signal.state_timer = 0
+            if b2.button("Yellow"):
+                st.session_state.signal.state = SignalState.YELLOW
+                st.session_state.signal.state_timer = 0
+            if b3.button("Red"):
+                st.session_state.signal.state = SignalState.RED
+                st.session_state.signal.state_timer = 0
+
+        # Visual 3-light widget (robust to any unexpected state serialization)
+        current_state = getattr(st.session_state.signal, "state", SignalState.GREEN)
+        # Handle possible string states on reruns
+        if isinstance(current_state, str):
+            if current_state.upper().endswith("RED"):
+                current_state = SignalState.RED
+            elif current_state.upper().endswith("YELLOW"):
+                current_state = SignalState.YELLOW
+            else:
+                current_state = SignalState.GREEN
+
+        if current_state == SignalState.RED:
+            top_c, mid_c, bot_c = ("red", "#111", "#111")
+        elif current_state == SignalState.YELLOW:
+            top_c, mid_c, bot_c = ("#111", "orange", "#111")
+        else:  # GREEN
+            top_c, mid_c, bot_c = ("#111", "#111", "green")
+        traffic_light_html = f"""
+        <div style='width:40px;padding:8px;background:#333;border-radius:8px;'>
+          <div style='width:20px;height:20px;border-radius:50%;margin:6px auto;background:{top_c};'></div>
+          <div style='width:20px;height:20px;border-radius:50%;margin:6px auto;background:{mid_c};'></div>
+          <div style='width:20px;height:20px;border-radius:50%;margin:6px auto;background:{bot_c};'></div>
+        </div>
+        """
+        st.markdown(traffic_light_html, unsafe_allow_html=True)
+
         # B-tree data
         st.subheader("B-tree Data")
         keys = st.session_state.manager.inorder_keys()
@@ -575,13 +697,19 @@ def main() -> None:
             tooltip=["car", "lane", "position", "speed"]
         ).properties(height=300)
         
-        # Add traffic signal
-        signal_df = pd.DataFrame([{"position": st.session_state.signal.position, "lane": 2}])
-        signal_chart = alt.Chart(signal_df).mark_rect(
-            width=20, height=0.2, color="gray"
-        ).encode(
+        # Add traffic signal, colored by state
+        signal_color_map = {
+            SignalState.GREEN: "green",
+            SignalState.YELLOW: "orange",
+            SignalState.RED: "red",
+        }
+        signal_df = pd.DataFrame([
+            {"position": st.session_state.signal.position, "lane": 2, "color": signal_color_map.get(current_state, "green")}
+        ])
+        signal_chart = alt.Chart(signal_df).mark_point(size=300).encode(
             x="position:Q",
-            y="lane:Q"
+            y="lane:Q",
+            color=alt.Color("color:N", scale=None)
         )
         
         st.altair_chart(road + signal_chart, use_container_width=True)
@@ -606,11 +734,12 @@ def main() -> None:
         signal = st.session_state.signal
         others = [c for cid, c in cars.items() if cid != 0]
 
-        # Update traffic signal
-        signal.update()
+        # Update traffic signal only in Auto mode
+        if st.session_state.signal_mode == "Auto":
+            signal.update()
 
-        # Update other cars with smooth movements
-        update_other_cars(cars, st.session_state.rng)
+        # Update other cars with smooth movements and signal/collision compliance
+        update_other_cars(cars, st.session_state.rng, signal)
 
         # Generate sensor readings and insert into B-tree
         insertion_order = list(cars.keys())
